@@ -35,13 +35,41 @@ kind version
 
 ---
 
-## Create a Cluster
+## Single-Node Cluster (Default)
 
 ```bash
 kind create cluster --name my-cluster
 ```
 
 This pulls the node image, starts a Docker container, bootstraps the control plane, and updates your kubeconfig automatically.
+
+---
+
+## Multi-Node Cluster
+
+For a production-like setup with one control plane and multiple workers, use a config file.
+
+**`kind-config.yaml`**
+
+```yaml
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+nodes:
+  - role: control-plane
+    image: kindest/node:v1.32.2
+  - role: worker
+    image: kindest/node:v1.32.2
+  - role: worker
+    image: kindest/node:v1.32.2
+  - role: worker
+    image: kindest/node:v1.32.2
+```
+
+```bash
+kind create cluster --name my-cluster --config kind-config.yaml
+```
+
+This gives you 1 control plane + 3 worker nodes — close to what a real EKS or GKE cluster looks like. Useful for testing pod scheduling across nodes, DaemonSets, node affinity, and failure scenarios where a node goes down.
 
 ---
 
@@ -52,11 +80,14 @@ kubectl cluster-info
 kubectl get nodes
 ```
 
-Expected output:
+Expected output for multi-node:
 
 ```
 NAME                       STATUS   ROLES           AGE   VERSION
-my-cluster-control-plane   Ready    control-plane   ...   v1.xx.x
+my-cluster-control-plane   Ready    control-plane   ...   v1.32.2
+my-cluster-worker          Ready    <none>          ...   v1.32.2
+my-cluster-worker2         Ready    <none>          ...   v1.32.2
+my-cluster-worker3         Ready    <none>          ...   v1.32.2
 ```
 
 ---
@@ -64,12 +95,12 @@ my-cluster-control-plane   Ready    control-plane   ...   v1.xx.x
 ## How It Works Internally
 
 ```
-Docker Container
+Docker Container (per node)
 └── Kubernetes Node
      ├── kubelet
      ├── kube-proxy
      ├── containerd
-     └── control-plane components
+     └── control-plane components  ← only on control-plane node
 ```
 
 When you run `kubectl apply -f`, Kubernetes processes it exactly the same way as in production. The containerized node is transparent to cluster internals.
@@ -88,5 +119,6 @@ Wipes everything — no leftover resources, no stale state.
 
 ## Notes
 
-- Multi-node setup is just a config file away — see KIND docs for `extraMounts` and worker node configuration
-- Great for testing Deployments, StatefulSets, Services, Ingress, PVCs, and failure scenarios without any cloud cost
+- Always pin the `image` version in your config file — `kindest/node:v1.32.2` ensures consistent behavior across machines
+- Multi-node clusters let you test real scheduling behavior — without them, every pod lands on the same node
+- The same `kubectl` commands and YAML manifests work here as on EKS, GKE, or AKS — no surprises
