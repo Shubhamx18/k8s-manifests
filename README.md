@@ -1,8 +1,8 @@
-<div align="center">
+<!-- <div align="center">
 
 <img src="https://readme-typing-svg.demolab.com?font=JetBrains+Mono&weight=700&size=28&duration=3000&pause=1000&color=326CE5&center=true&vCenter=true&width=600&lines=Kubernetes+from+Zero;Break+It.+Fix+It.+Own+It.;Real+Clusters.+Real+Problems." alt="Typing SVG" />
 
-<br/>
+<br/> -->
 
 ```
 ██╗  ██╗ █████╗ ███████╗    ███╗   ███╗ █████╗ ███╗  ██╗██╗███████╗███████╗███████╗████████╗███████╗
