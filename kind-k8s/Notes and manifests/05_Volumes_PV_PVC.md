@@ -1,66 +1,73 @@
-# Volumes, Persistent Volumes (PV) & Persistent Volume Claims (PVC)
+# Kubernetes Storage — Volumes, PV & PVC
 
-Pods are ephemeral. When a Pod is deleted or restarted, any data stored inside the container is lost. For applications like databases, log stores, or file uploads, data must survive Pod restarts. Kubernetes solves this with a three-layer storage architecture.
-
----
-
-## The Problem with Regular Container Storage
-
-```
-Pod restarts → container filesystem is wiped → data is gone
-```
-
-This is fine for stateless apps. It is not fine for databases, file uploads, or anything that needs to outlive a Pod.
+> Pods are ephemeral. When a Pod dies, its data dies too.  
+> Kubernetes solves this with a **three-layer storage architecture**.
 
 ---
 
-## Layer 1 — Volume (Pod-level, Temporary)
-
-A Volume is storage attached directly to a Pod. It survives container restarts within the same Pod, but is deleted when the Pod itself is deleted.
+## Why Storage Matters
 
 ```
-Pod deleted → Volume deleted → data gone
+Pod restarts  ->  container filesystem wiped  ->  data gone
 ```
 
-Use cases: cache, temp files, sharing data between containers in the same Pod.
+- Fine for **stateless apps**
+- Not fine for **databases, file uploads, logs**
 
-> Volumes are not suitable for databases or anything requiring long-term persistence.
+---
+
+## The Three Layers
+
+```
+Pod  ->  PVC  ->  PV  ->  Physical Storage
+```
+
+| Layer | Name | Scope | Survives Pod Deletion? |
+|---|---|---|---|
+| 1 | Volume | Pod-level | No |
+| 2 | Persistent Volume (PV) | Cluster-level | Yes |
+| 3 | Persistent Volume Claim (PVC) | Namespace-level | Yes |
+
+---
+
+## Layer 1 — Volume (Temporary)
+
+Attached directly to a Pod. Lives and dies with the Pod.
+
+**Use for:** cache, temp files, sharing data between containers in the same Pod.  
+**Not for:** databases or anything needing long-term persistence.
 
 ---
 
 ## Layer 2 — Persistent Volume (PV)
 
-A PersistentVolume represents actual physical storage made available to the cluster. It is a cluster-level resource — independent of any Pod or namespace. It exists even after the Pod that used it is deleted.
+A cluster-level resource representing **real physical storage** made available to Kubernetes.
 
-Backing storage types:
-- `hostPath` — local disk on the node (dev/testing only)
-- Cloud disks — AWS EBS, GCE PD
-- Network storage — NFS
+**Backing storage types:**
 
-Think of a PV as a real hard disk that has been made available to Kubernetes.
+| Type | Description |
+|---|---|
+| `hostPath` | Local disk on the node — dev/testing only |
+| AWS EBS / GCE PD | Cloud block storage |
+| NFS | Network file storage |
+
+> Think of a PV as a hard disk that Kubernetes knows about.
 
 ---
 
 ## Layer 3 — Persistent Volume Claim (PVC)
 
-A PVC is a request for storage made by an application. Pods never mount a PV directly — they always go through a PVC.
+A **request for storage** made by an application. Pods never mount a PV directly — always through a PVC.
 
-```
-Pod → PVC → PV → Physical Storage
-```
+Kubernetes binds a PVC to a PV when all three match:
 
-This separation keeps apps portable. The PVC says "I need 1Gi with ReadWriteOnce access." Kubernetes finds a matching PV and binds them. If no PV matches, the PVC stays unbound and the Pod won't start.
+| Field | Must match |
+|---|---|
+| `storageClassName` | Exact match |
+| `accessModes` | Must overlap |
+| `storage` | PVC request <= PV capacity |
 
----
-
-## Volume vs Persistent Volume
-
-| Feature | Volume | Persistent Volume |
-|---|---|---|
-| Scope | Pod-level | Cluster-level |
-| Lifetime | Pod lifetime | Independent of Pods |
-| Data persists after Pod deletion | No | Yes |
-| Suitable for databases | No | Yes |
+If no PV matches -> PVC stays `Pending` -> Pod won't start.
 
 ---
 
@@ -68,15 +75,16 @@ This separation keeps apps portable. The PVC says "I need 1Gi with ReadWriteOnce
 
 | Mode | Short | Meaning |
 |---|---|---|
-| ReadWriteOnce | RWO | Mounted read-write by one node |
-| ReadOnlyMany | ROX | Mounted read-only by many nodes |
-| ReadWriteMany | RWX | Mounted read-write by many nodes |
+| ReadWriteOnce | RWO | Read-write by **one node** |
+| ReadOnlyMany | ROX | Read-only by **many nodes** |
+| ReadWriteMany | RWX | Read-write by **many nodes** |
 
-Most cloud disk types (EBS, GCE PD) only support `ReadWriteOnce`. For `ReadWriteMany` you need NFS or a distributed storage system.
+> AWS EBS and GCE PD only support `ReadWriteOnce`.  
+> For `ReadWriteMany` you need NFS or a distributed storage system.
 
 ---
 
-## YAML Examples
+## YAML Examples — Luminary Project
 
 ### 1. Persistent Volume
 
@@ -84,15 +92,24 @@ Most cloud disk types (EBS, GCE PD) only support `ReadWriteOnce`. For `ReadWrite
 apiVersion: v1
 kind: PersistentVolume
 metadata:
-  name: my-pv
+  name: luminary-pv
+
 spec:
   capacity:
     storage: 1Gi
+
   accessModes:
     - ReadWriteOnce
+
+  storageClassName: manual          # label used for manual binding
+
+  persistentVolumeReclaimPolicy: Retain   # keep data after PVC is deleted
+
   hostPath:
-    path: /mnt/data    # only for local dev — never use hostPath in production
+    path: /mnt/data                 # local dev only — never use in production
 ```
+
+---
 
 ### 2. Persistent Volume Claim
 
@@ -100,17 +117,26 @@ spec:
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
-  name: my-pvc
-  namespace: myspace
+  name: luminary-pvc
+  namespace: luminary
+
 spec:
   accessModes:
-    - ReadWriteOnce
+    - ReadWriteOnce               # matches PV
+
   resources:
     requests:
-      storage: 1Gi
+      storage: 1Gi               # matches PV capacity
+
+  storageClassName: manual       # matches PV exactly — required for binding
 ```
 
-Kubernetes binds this PVC to any available PV that has at least 1Gi and supports `ReadWriteOnce`.
+> **Binding checklist:**
+> - `storageClassName: manual` — matches PV
+> - `accessModes: ReadWriteOnce` — matches PV
+> - `storage: 1Gi` — within PV capacity
+
+---
 
 ### 3. Pod Using the PVC
 
@@ -119,18 +145,20 @@ apiVersion: v1
 kind: Pod
 metadata:
   name: my-pod
-  namespace: myspace
+  namespace: luminary
+
 spec:
   containers:
     - name: app-container
       image: nginx
       volumeMounts:
-        - mountPath: /data
+        - mountPath: /data          # path inside the container
           name: storage-volume
+
   volumes:
     - name: storage-volume
       persistentVolumeClaim:
-        claimName: my-pvc
+        claimName: luminary-pvc     # references the PVC above
 ```
 
 ---
@@ -138,24 +166,31 @@ spec:
 ## Commands
 
 ```bash
+# Apply storage resources
 kubectl apply -f pv.yaml
 kubectl apply -f pvc.yaml
 
+# Check status
 kubectl get pv
-kubectl get pvc -n myspace
+kubectl get pvc -n luminary
 
-kubectl describe pvc my-pvc -n myspace
+# Debug binding issues
+kubectl describe pvc luminary-pvc -n luminary
 ```
 
-Check the `STATUS` column:
-- `Bound` — PVC found a matching PV, Pod can start
-- `Pending` — no matching PV available, Pod won't start
+**PVC status meanings:**
+
+| Status | Meaning |
+|---|---|
+| `Bound` | Matched a PV — Pod can start |
+| `Pending` | No matching PV found — Pod won't start |
 
 ---
 
-## StatefulSet — Automatic PVC per Pod
+## StatefulSet — One PVC per Pod (Databases)
 
-StatefulSets use `volumeClaimTemplates` to automatically create one PVC per Pod replica. This is the correct way to run databases in Kubernetes.
+StatefulSets use `volumeClaimTemplates` to auto-create a dedicated PVC per replica.  
+This is the **correct way to run databases** in Kubernetes.
 
 ```yaml
 volumeClaimTemplates:
@@ -168,13 +203,14 @@ volumeClaimTemplates:
           storage: 1Gi
 ```
 
-This creates `data-mysql-0`, `data-mysql-1`, etc. — each pod gets its own dedicated persistent storage.
+Creates: `data-mysql-0`, `data-mysql-1`, etc. — each Pod gets its own storage.
 
 ---
 
-## Production Pattern — StorageClass (Dynamic Provisioning)
+## Production Pattern — Dynamic Provisioning with StorageClass
 
-In production, you don't create PVs manually. You define a StorageClass, and Kubernetes provisions PVs on demand when a PVC is created.
+In production, **never create PVs manually**.  
+Define a `StorageClass` — Kubernetes provisions PVs automatically when a PVC is created.
 
 ```yaml
 apiVersion: v1
@@ -184,13 +220,13 @@ metadata:
 spec:
   accessModes:
     - ReadWriteOnce
-  storageClassName: standard   # maps to a cloud disk type
+  storageClassName: standard        # maps to a cloud disk type (EBS, GCE PD, etc.)
   resources:
     requests:
       storage: 5Gi
 ```
 
-Cloud providers (EKS, GKE, AKS) come with StorageClasses pre-configured.
+> Cloud providers (EKS, GKE, AKS) come with StorageClasses pre-configured.
 
 ---
 
@@ -198,7 +234,9 @@ Cloud providers (EKS, GKE, AKS) come with StorageClasses pre-configured.
 
 | Mistake | Why It's Wrong |
 |---|---|
-| Storing database data in the container filesystem | Lost on every Pod restart |
-| Expecting a plain Volume to persist data across Pod deletions | Volumes are Pod-scoped |
-| Using `hostPath` in production | Ties your data to a specific node |
-| Mounting a PV directly into a Pod without a PVC | Not how Kubernetes storage works |
+| Storing DB data in container filesystem | Lost on every Pod restart |
+| Expecting a plain Volume to persist across Pod deletions | Volumes are Pod-scoped |
+| Using `hostPath` in production | Ties data to a specific node — breaks if Pod moves |
+| Mounting a PV directly into a Pod | Not how Kubernetes storage works — always use a PVC |
+| Mismatched `storageClassName` between PV and PVC | PVC stays `Pending`, Pod never starts |
+| PVC requests more storage than PV capacity | No binding — PVC stays `Pending` |
