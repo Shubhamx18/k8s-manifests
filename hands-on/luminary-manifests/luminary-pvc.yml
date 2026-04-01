@@ -1,0 +1,14 @@
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: luminary-pvc
+  namespace: luminary
+
+
+spec:
+  accessModes:
+     - ReadWriteOnce
+  resources:
+      requests:
+         storage: 1Gi
+  storageClassName: manual
