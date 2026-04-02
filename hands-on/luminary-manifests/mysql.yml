@@ -1,9 +1,10 @@
 apiVersion: apps/v1
-kind: Deployment
+kind: StatefulSet
 metadata:
   name: mysql
   namespace: luminary
 spec:
+  serviceName: mysql-service
   replicas: 1
   selector:
     matchLabels:
@@ -20,9 +21,28 @@ spec:
             - containerPort: 3306
           env:
             - name: MYSQL_ROOT_PASSWORD
-              value: Shubham@6024
+              valueFrom:
+                  secretKeyRef:
+                     name: luminary-secret
+                     key: MYSQL_ROOT_PASSWORD
             - name: MYSQL_DATABASE
-              value: project_management_db
+              valueFrom:
+                 configMapKeyRef:
+                    name: luminary-config
+                    key:  MYSQL_DATABASE
+          volumeMounts:
+            - name: luminary-volume
+              mountPath:  /var/lib/mysql
+
+  volumeClaimTemplates:
+          - metadata:
+              name: luminary-volume
+            spec:
+              accessModes: ["ReadWriteOnce"]
+              resources:
+                 requests:
+                   storage: 1Gi
+
 ---
 apiVersion: v1
 kind: Service
@@ -30,7 +50,7 @@ metadata:
   name: mysql-service
   namespace: luminary
 spec:
-  type: ClusterIP
+  clusterIP: None
   selector:
         app: mysql
   ports:
