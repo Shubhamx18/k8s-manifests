@@ -21,21 +21,45 @@ spec:
             - containerPort: 5000
           env:
             - name: DB_HOST
-              value: mysql-service
+              valueFrom:
+                  configMapKeyRef:
+                      name: luminary-config
+                      key:  DB_HOST
             - name: DB_NAME
-              value: project_management_db
+              valueFrom:
+                  configMapKeyRef:
+                      name: luminary-config
+                      key:  DB_NAME
             - name: DB_USER
-              value: root
+              valueFrom:
+                  configMapKeyRef:
+                      name: luminary-config
+                      key:  DB_USER
             - name: DB_PASSWORD
-              value: Shubham@6024
+              valueFrom:
+                  secretKeyRef:
+                      name: luminary-secret
+                      key:  DB_PASSWORD
             - name: MYSQL_PORT
-              value: "3306"
+              valueFrom:
+                  configMapKeyRef:
+                      name: luminary-config
+                      key:  MYSQL_PORT
             - name: JWT_SECRET
-              value: luminary_dev_secret_key_2024
+              valueFrom:
+                  secretKeyRef:
+                      name: luminary-secret
+                      key:  JWT_SECRET
             - name: AGORA_APP_ID
-              value: e6061be9565b47e0b9705f86de2a42f5
+              valueFrom:
+                  secretKeyRef:
+                      name: luminary-secret
+                      key:  AGORA_APP_ID
             - name: AGORA_APP_CERTIFICATE
-              value: 8bfbd4ed44254e25be4402e84f40d642
+              valueFrom:
+                  secretKeyRef:
+                      name: luminary-secret
+                      key:  AGORA_APP_CERTIFICATE
 ---
 apiVersion: v1
 kind: Service
