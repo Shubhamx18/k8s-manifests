@@ -18,6 +18,7 @@ spec:
                     image: shubhamm18/netflix-clone:latest
                     port:
                       - containerPort: 3000
+                    imagePullPolicy: Always
 
 ---
 
