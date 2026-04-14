@@ -169,7 +169,7 @@ spec:
 
 ---
 
-### 7. Service (NodePort)
+### 7. Service (NodePort.)
 
 Exposes your app on a static port on each Node's IP.
 
