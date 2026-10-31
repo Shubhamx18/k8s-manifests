@@ -33,7 +33,7 @@
 
 <div align="center">
 
-## ⚡ What You Will Be Able to Do
+##  What You Will Be Able to Do
 
 </div>
 
@@ -48,7 +48,7 @@ Debug anything that breaks           →   CrashLoopBackOff, PVC Pending, 502s �
 
 ---
 
-## 📂 Repo Map
+## Repo Map
 
 ```
 k8s-manifests/
@@ -76,7 +76,7 @@ k8s-manifests/
 
 ---
 
-## 🗺️ Learning Path
+##  Learning Path
 
 > Follow this order. Each topic builds directly on the previous one.
 
@@ -97,7 +97,7 @@ k8s-manifests/
 
 ---
 
-## 🏗️ The Capstone — MySQL + Node.js on Kubernetes
+##  The Capstone — MySQL + Node.js on Kubernetes
 
 > This is what the entire repo builds toward. A production-shaped app using every concept covered.
 
@@ -147,7 +147,7 @@ kubectl get all -n myspace
 
 ---
 
-## 🔥 Debugging — Quick Reference
+##  Debugging — Quick Reference
 
 > Full diagnosis guide with commands, causes, and fixes → [`10_Kubernetes_Debugging.md`](./10_Kubernetes_Debugging.md)
 
@@ -178,7 +178,7 @@ kubectl get events -n <namespace> --sort-by='.lastTimestamp'     # full timeline
 
 ---
 
-## 🧠 Concepts at a Glance
+##  Concepts at a Glance
 
 <br/>
 
@@ -228,7 +228,7 @@ kubectl get events -n <namespace> --sort-by='.lastTimestamp'     # full timeline
 
 ---
 
-## 🚀 Get Started in 3 Minutes
+##  Get Started in 3 Minutes
 
 **Prerequisites:** [Docker](https://docs.docker.com/get-docker/) · [kubectl](https://kubernetes.io/docs/tasks/tools/) · [KIND](https://kind.sigs.k8s.io)
 
@@ -260,7 +260,7 @@ But mastery is different. Mastery is when something breaks in a way you've never
 
 ---
 
-## 🤝 Contributing
+##  Contributing
 
 Found a mistake, a missing failure case, or a better explanation? PRs are open.
 
@@ -283,6 +283,6 @@ The bar is simple — everything must be practical. No filler theory. Every conc
 
 <br/>
 
-*If this repo helped you — star it, share it, or open a PR.* ⭐
+*If this repo helped you — star it, share it, or open a PR.* 
 
 </div>
