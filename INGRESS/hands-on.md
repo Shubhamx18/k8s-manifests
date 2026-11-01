@@ -136,40 +136,51 @@ spec:
                   number: 80
 ```
 
-### Line by line
+### Read it like a story
 
+Picture an office building with two departments, nginx and portfolio. At the front desk sits a receptionist, the NGINX Ingress Controller. The file ingress.yml is the note stuck on the desk that tells the receptionist where to send each visitor.
+
+Here is the same note with a comment on every important line:
+
+```yaml
 apiVersion: networking.k8s.io/v1
-The Kubernetes API that defines the Ingress object.
+kind: Ingress                      # this is a note for the receptionist
+metadata:
+  name: app-ingress                # the name of the note
+  annotations:
+    nginx.ingress.kubernetes.io/rewrite-target: /   # take off the department label at the door
+spec:
+  ingressClassName: nginx          # this note is for the NGINX receptionist, not any other
+  rules:
+    - http:
+        paths:
+          - path: /nginx           # a visitor asks for /nginx
+            pathType: Prefix       # and /nginx/anything counts too
+            backend:
+              service:
+                name: nginx-service    # send them to the nginx department
+                port:
+                  number: 80           # and knock on its door number 80
+          - path: /port            # a visitor asks for /port
+            pathType: Prefix
+            backend:
+              service:
+                name: port-service     # send them to the portfolio department
+                port:
+                  number: 80
+```
 
-kind: Ingress
-The type of object being created. An Ingress is a set of routing rules for web traffic coming into the cluster.
+In plain English, the whole note says:
 
-metadata.name: app-ingress
-The name of this Ingress, used in commands such as kubectl describe ingress app-ingress.
+- If someone asks for /nginx, send them to nginx-service on port 80.
+- If someone asks for /port, send them to port-service on port 80.
+- Before handing them over, change the path to /, because inside the departments the home page lives at /.
 
-annotations
-Extra settings for the controller. This is explained in detail in the next section.
+### Three things that trip people up
 
-spec.ingressClassName: nginx
-Selects which Ingress Controller must follow these rules. Here it is the NGINX Ingress Controller.
-
-spec.rules
-The list of routing rules. No host name is given, so the rules apply to any address used to reach the controller.
-
-http.paths
-The list of URL paths and where each one goes.
-
-path: /nginx and path: /port
-The URL path to match.
-
-pathType: Prefix
-Match the path and everything below it. For /port this matches /port and /port/anything. The value is case sensitive, so Prefix must start with a capital P.
-
-backend.service.name
-The Service that receives the traffic. It must match the Service name exactly: nginx-service or port-service.
-
-backend.service.port.number: 80
-The port of that Service. This is the Service port, not a NodePort.
+- The Service name in the note must match the real Service exactly. One wrong letter and the receptionist has nowhere to send the visitor.
+- Prefix needs a capital P. Kubernetes rejects prefix and perfix.
+- Port 80 is the port of the Service, not a NodePort. The Ingress never uses NodePort numbers.
 
 ---
 
