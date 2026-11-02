@@ -33,36 +33,7 @@ User ──> Ingress Controller (NGINX pod) ──> Service ──> Pods
 
 ## 3. Build It from Scratch
 
-### Step 1: Create a kind cluster
-
-Optional: map ports 80 and 443 so you can use `http://localhost` without port-forward. If your cluster already exists without this, skip it and use port-forward in Step 6.
-
-```yaml
-# kind-config.yaml
-kind: Cluster
-apiVersion: kind.x-k8s.io/v1alpha4
-nodes:
-- role: control-plane
-  kubeadmConfigPatches:
-  - |
-    kind: InitConfiguration
-    nodeRegistration:
-      kubeletExtraArgs:
-        node-labels: "ingress-ready=true"
-  extraPortMappings:
-  - containerPort: 80
-    hostPort: 80
-    protocol: TCP
-  - containerPort: 443
-    hostPort: 443
-    protocol: TCP
-```
-
-```bash
-kind create cluster --config kind-config.yaml
-```
-
-### Step 2: Install the Ingress Controller
+### Step 1: Install the Ingress Controller
 
 ```bash
 kubectl apply -f https://raw.githubusercontent.com/kubernetes/ingress-nginx/main/deploy/static/provider/kind/deploy.yaml
@@ -70,7 +41,7 @@ kubectl wait -n ingress-nginx --for=condition=ready pod \
   -l app.kubernetes.io/component=controller --timeout=120s
 ```
 
-### Step 3: Create the namespace and the apps
+### Step 2: Create the namespace and the apps
 
 ```bash
 kubectl create namespace state
@@ -151,7 +122,7 @@ kubectl apply -f app.yml -f my.yml
 kubectl get pods,svc,endpoints -n state     # endpoints must show pod IPs
 ```
 
-### Step 4: Create the Ingress
+### Step 3: Create the Ingress
 
 ```yaml
 # ingress.yml
@@ -188,7 +159,7 @@ kubectl apply -f ingress.yml
 kubectl get ingress -n state
 ```
 
-### Step 5: Look at what the controller created
+### Step 4: Look at what the controller created
 
 The Ingress does not create a Service. The controller Service is created when ingress-nginx is installed, in the `ingress-nginx` namespace.
 
@@ -206,16 +177,9 @@ kubectl get pods -n ingress-nginx -o wide
 kubectl get endpoints ingress-nginx-controller -n ingress-nginx
 ```
 
-### Step 6: Access the apps
+### Step 5: Access the apps
 
-**If you mapped ports in Step 1:**
-
-```bash
-curl http://localhost/nginx
-curl http://localhost/port
-```
-
-**Otherwise, use port-forward** (leave it running in one terminal):
+**Use port-forward** (leave it running in one terminal):
 
 ```bash
 kubectl port-forward -n ingress-nginx svc/ingress-nginx-controller 8082:80
