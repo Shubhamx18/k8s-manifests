@@ -1,67 +1,83 @@
 # Kubernetes Ingress
 
-An Ingress acts as an intelligent traffic manager for a Kubernetes cluster. Positioned at the cluster boundary, it manages and routes external HTTP and HTTPS requests to internal cluster services.
+An Ingress is a set of routing rules for external HTTP and HTTPS traffic entering a Kubernetes cluster. It sends requests to internal Services based on the hostname or URL path. The rules are only a specification: an **Ingress Controller** (for example ingress-nginx) must be running in the cluster to read them and do the actual routing.
 
 ---
 
-## Overview & Architecture
+## 1. Why Use Ingress?
 
-### Why Use Ingress?
+Exposing every application with a `NodePort` or `LoadBalancer` Service creates problems:
 
-Standard Kubernetes service publication methods like `NodePort` or `LoadBalancer` introduce distinct operational challenges:
+- **No advanced routing.** Services cannot split traffic by URL path or hostname.
+- **Cost and complexity.** A `LoadBalancer` Service normally provisions one cloud load balancer per Service, which adds cost and management overhead.
+- **No central TLS handling.** Each Service would have to manage its own certificates.
 
-- **Limited Advanced Routing capabilities** — Standard services lack built-in support for path-based or host-based traffic split policies.
+Ingress solves this with **one entry point** that routes to many Services.
 
-- **Cloud Infrastructure Dependency** — Provisioning dedicated cloud load balancers per service increases operational complexity and cloud spending across environments.
+---
 
-### Request Flow Architecture
-
-An Ingress resource functions as an internal routing specification, dictating service destinations based on request paths or hostnames.
-
-> *"Direct requests matching defined domain names or paths to designated internal cluster services."*
+## 2. How a Request Flows
 
 ```
-[ User Request ] ──> [ Ingress Controller ] ──> [ Ingress Rules ] ──> [ Service ] ──> [ Pods ]
+User ──> Ingress Controller ──> Service ──> Pods
+              ▲
+              │ reads
+        Ingress rules (the Ingress resource)
 ```
 
----
+1. The user sends a request to the cluster's entry point.
+2. The Ingress Controller (an NGINX pod) receives it.
+3. The controller matches the host and path against the Ingress rules.
+4. It forwards the request to the matching Service, which sends it to a healthy Pod.
 
-## Core Capabilities
-
-▸ **Path-Based Routing**  
-Direct traffic using request paths (e.g., routing `/shop` requests to `shop-service` and `/blog` requests to `blog-service`).
-
-▸ **Host-Based Routing**  
-Route inbound requests based on the requested domain name or subdomain.
-
-▸ **TLS / SSL Termination**  
-Manage SSL certificates and terminate HTTPS traffic efficiently at the edge of the cluster.
+> Ingress resource = the rules. Ingress Controller = the software that enforces them. Without a controller, an Ingress does nothing.
 
 ---
 
-## Service Type Comparison
+## 3. Core Capabilities
+
+- **Path-based routing:** send `/shop` to `shop-service` and `/blog` to `blog-service`.
+- **Host-based routing:** send `shop.example.com` and `blog.example.com` to different Services.
+- **TLS/SSL termination:** handle HTTPS certificates once, at the edge of the cluster.
+
+---
+
+## 4. Service Types Compared
 
 | Capability | NodePort | LoadBalancer | Ingress |
 |---|---|---|---|
-| External Access | Yes | Yes | Yes |
-| Single Entry Multi-Service Routing | No | No | **Yes** |
-| Path / Host-Based Routing | No | No | **Yes** |
-| SSL / TLS Termination | No | No | **Yes** |
-| Resource Cost Efficiency | Moderate | High | **Optimal** |
+| External access | Yes | Yes | Yes |
+| One entry point for many Services | No | No | **Yes** |
+| Path / host-based routing | No | No | **Yes** |
+| TLS termination | No | No | **Yes** |
+| Cost for many Services | Low (but exposes node ports) | High (one load balancer each) | **Low (one shared entry point)** |
+
+Ingress usually sits in front of ClusterIP Services, and the controller itself is exposed through a single NodePort or LoadBalancer Service.
 
 ---
 
-## Configuration Examples
+## 5. Important Rules
 
-### Example 1 — Path-Based Routing
+- **Same namespace.** An Ingress can only route to Services in its **own namespace**. If your Services are in `state`, the Ingress must also have `namespace: state`. Otherwise you get 503 errors.
+- **`ingressClassName` must match your controller** (here `nginx`).
+- **`pathType`:** `Prefix` matches the path and everything below it. `Exact` matches only that exact path.
+- **`rewrite-target: /`** strips the matched prefix before sending the request to the backend, so `/shop` reaches the app as `/`. This works for simple apps, but apps that load assets from absolute paths (such as `/style.css`) may render broken behind a path prefix.
+- **Services need endpoints.** If a Service selects no running Pods, the Ingress returns 503.
 
-Route distinct request paths (`/shop` and `/blog`) on a shared domain to dedicated backend services.
+---
+
+## 6. Configuration Examples
+
+### Example 1: Path-based routing
+
+Route `/shop` and `/blog` on a shared domain to separate Services.
 
 ```yaml
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
   name: app-ingress
+  namespace: default
   annotations:
     nginx.ingress.kubernetes.io/rewrite-target: /
 spec:
@@ -85,11 +101,9 @@ spec:
                   number: 80
 ```
 
----
+### Example 2: Host-based routing
 
-### Example 2 — Host-Based Routing
-
-Direct traffic dynamically based on the requested host domain name.
+Route traffic by requested domain name.
 
 ```yaml
 apiVersion: networking.k8s.io/v1
@@ -121,11 +135,13 @@ spec:
                   number: 80
 ```
 
----
+### Example 3: TLS / HTTPS termination
 
-### Example 3 — TLS / HTTPS Termination
+The certificate is stored in a TLS Secret, which must be in the same namespace as the Ingress.
 
-Manage certificate termination securely at the Ingress controller boundary.
+```bash
+kubectl create secret tls shop-tls --cert=tls.crt --key=tls.key
+```
 
 ```yaml
 apiVersion: networking.k8s.io/v1
@@ -153,15 +169,50 @@ spec:
 
 ---
 
-## Operation & Troubleshooting Commands
+## 7. Accessing an Ingress on a kind Cluster
+
+A kind cluster runs inside Docker, so the ingress controller is not reachable from the host unless port 80 was mapped when the cluster was created. The simplest way to test is a port-forward to the controller:
 
 ```bash
-# List all configured Ingress resources
+# Terminal 1 (leave running)
+kubectl port-forward -n ingress-nginx svc/ingress-nginx-controller 8082:80
+
+# Terminal 2
+curl http://localhost:8082/shop
+curl http://localhost:8082/blog
+```
+
+To open it from another machine's browser, `localhost` will not work because it points at that machine. Either:
+
+- bind to all interfaces: `kubectl port-forward --address 0.0.0.0 ...` and browse to `http://<server-ip>:8082/shop`, or
+- use an SSH tunnel from your laptop: `ssh -L 8082:localhost:8082 user@<server-ip>`, then browse to `http://localhost:8082/shop`.
+
+To avoid port-forwarding permanently, create the kind cluster with `extraPortMappings` for ports 80 and 443 and install the kind-specific ingress-nginx manifest.
+
+---
+
+## 8. Operation and Troubleshooting Commands
+
+```bash
+# List Ingress resources (add -n <namespace> or -A for all namespaces)
 kubectl get ingress
 
-# Inspect detailed routing configurations and cluster events
+# Show rules, backends and events
 kubectl describe ingress app-ingress
 
-# Fetch operational logs from the NGINX Ingress Controller
+# Check the controller is running
+kubectl get pods -n ingress-nginx
+
+# Controller logs
 kubectl logs -n ingress-nginx -l app.kubernetes.io/component=controller
+
+# Check Services have endpoints (empty = no matching running Pods)
+kubectl get endpoints -n <namespace>
 ```
+
+| Symptom | Likely cause |
+|---|---|
+| Connection refused | Port-forward not running, wrong port, or the request is not reaching the server |
+| 404 from nginx | No rule matches the host or path |
+| 503 | Service has no endpoints, or Ingress and Service are in different namespaces |
+| Page loads but CSS/JS/images are broken | App uses absolute asset paths behind a path prefix |
