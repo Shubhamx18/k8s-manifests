@@ -1,155 +1,92 @@
 # Kubernetes Autoscaling: HPA & VPA
 
-> Fixed Pod counts and guessed resource sizes waste money or fail under load.
-> **HPA** changes how many Pods run. **VPA** changes how big each Pod is.
+> **HPA** adds or removes Pods when traffic changes.
+> **VPA** makes each Pod bigger or smaller based on real usage.
+> Both need **metrics-server** to see CPU and memory usage.
 
 ---
 
-## Overview
-
-```
-Traffic changes  ->  HPA  ->  more / fewer Pods        (scale out)
-Usage changes    ->  VPA  ->  bigger / smaller Pods    (scale up)
-Both need        ->  metrics-server  ->  live CPU and memory data
-```
+## The Big Picture
 
 | | HPA | VPA |
 |---|---|---|
-| Scales | Number of Pods | Size of each Pod (CPU / memory requests) |
-| Best for | Stateless apps with variable traffic | Single-instance apps, right-sizing |
-| Built into Kubernetes | Yes | No, install separately |
-| Needs metrics-server | Yes | Yes |
-| Disruption | None | Pod restarts (except `Off` / `Initial` modes) |
+| What it changes | **Number** of Pods | **Size** of each Pod (CPU / memory requests) |
+| Think of it as | Hiring more workers | Giving each worker more strength |
+| Best for | Web apps and APIs with changing traffic | Apps that run as a single copy, and finding the right resource sizes |
+| Built into Kubernetes | Yes | No, install it yourself |
+| Restarts Pods | No | Yes (except in `Off` and `Initial` modes) |
 
-**Setup order:**
+**Follow this order:**
 
-1. Install **metrics-server** (once)
-2. Use **HPA** for traffic-based scaling
-3. Install **VPA** if you want resource recommendations or tuning
+```
+Step 1: metrics-server  ->  Step 2: HPA  ->  Step 3: VPA (optional)
+```
 
 ---
 
-## Install metrics-server
+## Step 1: Install metrics-server (once per cluster)
 
-**metrics-server** collects CPU and memory usage from the nodes. It is a separate add-on, installed **once per cluster** and shared by HPA, VPA and `kubectl top`. Install it before anything else in this file.
+metrics-server reads CPU and memory usage from the nodes. HPA, VPA and `kubectl top` all depend on it.
 
-**1. Check if it is already installed:**
+**Check if it is already installed:**
 
 ```bash
-kubectl get deployment metrics-server -n kube-system
 kubectl top nodes
 ```
 
-If `kubectl top nodes` prints CPU and memory numbers, skip to the next section. If you get "Metrics API not available" or the Deployment is not found, install it.
-
-**2. Install:**
+If this prints CPU and memory numbers, skip to Step 2. If you get an error like "Metrics API not available", install it:
 
 ```bash
+# Install
 kubectl apply -f https://github.com/kubernetes-sigs/metrics-server/releases/latest/download/components.yaml
 ```
 
-**3. kind clusters only: patch it.** kind's kubelet certificates are self-signed, so without this flag the Pod never becomes Ready:
+**Only on kind:** add one flag, because kind's certificates are self-signed. Without it the Pod never becomes Ready.
 
 ```bash
 kubectl patch deployment metrics-server -n kube-system --type='json' \
   -p='[{"op":"add","path":"/spec/template/spec/containers/0/args/-","value":"--kubelet-insecure-tls"}]'
 ```
 
-**4. Verify** (wait about a minute):
+**Verify** (wait about a minute):
 
 ```bash
-kubectl get pods -n kube-system | grep metrics-server     # 1/1 Running
+kubectl get pods -n kube-system | grep metrics-server    # should be 1/1 Running
 kubectl top nodes
 kubectl top pods -A
 ```
 
-| Problem | Fix |
-|---|---|
-| Pod `0/1 Running` on kind | Apply the `--kubelet-insecure-tls` patch above |
-| `Metrics API not available` | metrics-server is not installed or not Ready yet |
-| `kubectl top` works but HPA shows `<unknown>` | Containers have no CPU `requests` |
-| `kubectl top` works but VPA shows no recommendation | Wait a few minutes, VPA needs usage history |
-
 ---
 
-## Part 1: HPA (Horizontal Pod Autoscaler)
+## Step 2: HPA (Horizontal Pod Autoscaler)
 
-> HPA changes the **number of Pods** automatically based on live metrics.
+### How it works
 
-### Why HPA Matters
-
-```
-Traffic spike  ->  Pods overloaded  ->  slow responses / crashes
-Traffic drops  ->  idle Pods        ->  wasted resources
-```
-
-- Good for **stateless apps** (web servers, APIs)
-- Not suited to apps that cannot run more than one copy (single-writer databases)
-
----
-
-### How It Works
+HPA checks usage every 15 seconds and calculates how many Pods you need:
 
 ```
-metrics-server  ->  HPA controller  ->  Deployment  ->  more / fewer Pods
-   (reads usage)    (checks every 15s)   (replicas changed)
+desired Pods = ceil( current Pods x current usage / target usage )
 ```
 
-| Component | Role |
-|---|---|
-| **metrics-server** | Collects CPU and memory usage from the nodes. HPA does not work without it. |
-| **HPA controller** | Compares current usage with your target and calculates the replica count. |
-| **Deployment / StatefulSet** | The workload whose `replicas` value HPA changes. |
+Example: 2 Pods running at 90% CPU, target 50% -> ceil(2 x 90 / 50) = **4 Pods**.
 
-**The formula:**
+Scaling up is fast. Scaling down waits about 5 minutes, so the count doesn't bounce up and down.
 
-```
-desiredReplicas = ceil( currentReplicas x currentUsage / targetUsage )
-```
+> **Important:** CPU usage is measured as a percentage of the container's CPU **request**. If the container has no `requests.cpu`, HPA cannot work.
 
-Example: 2 Pods at 90% CPU, target 50% -> ceil(2 x 90 / 50) = **4 Pods**.
-
----
-
-### Key Behaviors
-
-| Behavior | Default |
-|---|---|
-| Check interval | Every 15 seconds |
-| Tolerance | No change if within about 10% of the target |
-| Scale-down delay | 300 seconds (stabilization window), to avoid flapping |
-| Scale-up | Immediate once the target is exceeded |
-
-> CPU utilization is measured as a **percentage of the Pod's CPU request**.
-> If the container has no CPU request, HPA cannot calculate anything.
-
----
-
-### Prerequisites
-
-1. **metrics-server** installed and working (see **Install metrics-server** above)
-2. **Resource requests** set on the containers
-3. A scalable workload (Deployment, StatefulSet, ReplicaSet)
-
----
-
-### YAML Examples: Luminary Project
-
-#### 1. Deployment (with resource requests)
+### 2a. The Deployment (with CPU request)
 
 ```yaml
+# deployment.yaml
 apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: web
   namespace: luminary
-
 spec:
-  # do not set replicas here once HPA manages it
   selector:
     matchLabels:
       app: web
-
   template:
     metadata:
       labels:
@@ -162,325 +99,168 @@ spec:
             - containerPort: 80
           resources:
             requests:
-              cpu: 100m            # required, HPA % is based on this
+              cpu: 100m          # required for HPA
               memory: 128Mi
             limits:
               cpu: 500m
               memory: 256Mi
 ```
 
----
+> Do not set `replicas:` in the Deployment once HPA manages it. Re-applying would reset the count.
 
-#### 2. HPA (autoscaling/v2)
+### 2b. The HPA
 
 ```yaml
+# hpa.yaml
 apiVersion: autoscaling/v2
 kind: HorizontalPodAutoscaler
 metadata:
   name: web-hpa
   namespace: luminary
-
 spec:
   scaleTargetRef:
     apiVersion: apps/v1
     kind: Deployment
     name: web                      # must match the Deployment name
-
-  minReplicas: 2                   # never fewer than this
-  maxReplicas: 10                  # never more than this
-
+  minReplicas: 2                   # never fewer than 2
+  maxReplicas: 10                  # never more than 10
   metrics:
     - type: Resource
       resource:
         name: cpu
         target:
           type: Utilization
-          averageUtilization: 50   # keep average CPU near 50% of requests
-
-  behavior:                        # optional: control the speed
-    scaleDown:
-      stabilizationWindowSeconds: 300
-      policies:
-        - type: Pods
-          value: 1                 # remove at most 1 Pod ...
-          periodSeconds: 60        # ... per minute
-    scaleUp:
-      policies:
-        - type: Percent
-          value: 100               # at most double ...
-          periodSeconds: 60        # ... per minute
+          averageUtilization: 50   # keep average CPU near 50% of the request
 ```
 
-> **Checklist:**
-> - `scaleTargetRef.name` matches the Deployment
-> - Container has `resources.requests.cpu`
-> - `minReplicas` is at least 2 if you need high availability
-
----
-
-#### 3. Quick Imperative Version
+Quick alternative (good for testing):
 
 ```bash
 kubectl autoscale deployment web -n luminary --cpu-percent=50 --min=2 --max=10
 ```
 
-> Fine for testing. Use YAML for anything you want in Git.
-
----
-
-### Commands
+### 2c. Apply and watch
 
 ```bash
-# Apply
+kubectl create namespace luminary
 kubectl apply -f deployment.yaml
 kubectl apply -f hpa.yaml
 
-# Watch scaling live
 kubectl get hpa -n luminary -w
-
-# Debug: shows conditions, events, current vs target
-kubectl describe hpa web-hpa -n luminary
-
-# See current usage
-kubectl top pods -n luminary
 ```
 
-**Reading `kubectl get hpa`:**
+Read the output like this:
 
 ```
 NAME      REFERENCE        TARGETS   MINPODS   MAXPODS   REPLICAS
 web-hpa   Deployment/web   23%/50%   2         10        2
 ```
 
-| TARGETS value | Meaning |
-|---|---|
-| `23%/50%` | Current usage / target. Working. |
-| `<unknown>/50%` | No metrics. Check metrics-server and CPU requests. |
+- `23%/50%` means current usage / target. Working.
+- `<unknown>/50%` means no metrics. Check Step 1 and that the Deployment has `requests.cpu`.
 
----
-
-### Test It: Generate Load
+### 2d. Test it with load
 
 ```bash
-# Terminal 1: watch
+# Terminal 1: keep watching
 kubectl get hpa web-hpa -n luminary -w
 
-# Terminal 2: expose the Deployment and hit it in a loop
+# Terminal 2: give the Deployment a Service, then send traffic in a loop
 kubectl expose deployment web -n luminary --port=80
 kubectl run load -n luminary --rm -it --image=busybox:1.36 -- \
   /bin/sh -c "while true; do wget -q -O- http://web; done"
 ```
 
-Stop the load with Ctrl+C. The replica count falls back after about 5 minutes (the scale-down window).
+Replicas should climb above 2. Stop the load with Ctrl+C, and after about 5 minutes the count falls back.
 
----
+### 2e. HPA problems
 
-### Common Mistakes
-
-| Mistake | Why It's Wrong |
+| Problem | Cause and fix |
 |---|---|
-| No CPU `requests` on the container | HPA shows `<unknown>` and never scales |
-| metrics-server not installed | No metrics, so no scaling |
-| Hardcoding `replicas` in the Deployment and re-applying it | Resets the count HPA chose |
-| `minReplicas` equal to `maxReplicas` | HPA can never scale |
-| CPU target too low (e.g. 10%) | Scales out constantly |
-| Using HPA and VPA on the same CPU/memory metric | They fight each other |
-| Expecting instant scale-down | Default 5 minute stabilization window |
-| Cluster has no spare node capacity | New Pods stay `Pending`. HPA adds Pods, it does not add nodes (that is the Cluster Autoscaler). |
+| `<unknown>` in TARGETS | metrics-server not working, or no `requests.cpu` on the container |
+| Never scales | `minReplicas` equals `maxReplicas`, or usage never reaches the target |
+| New Pods stay `Pending` | The nodes have no free capacity. HPA adds Pods, not nodes |
+| Replica count resets after `kubectl apply` | `replicas:` is hard-coded in the Deployment. Remove it |
 
 ---
 
-### HPA at a Glance
+## Step 3: VPA (Vertical Pod Autoscaler)
 
-| Question | Answer |
+### How it works
+
+VPA watches how much CPU and memory your Pods really use, then recommends better `requests`. Depending on its mode, it can also apply them by restarting the Pods.
+
+It is **not built into Kubernetes**. It adds three components: a **recommender** (calculates), an **updater** (restarts Pods) and an **admission controller** (sets the new values on new Pods).
+
+### 3a. Update modes
+
+| `updateMode` | What VPA does |
 |---|---|
-| What does it change? | Number of Pods |
-| Best for | Stateless apps with variable traffic |
-| Needs | metrics-server, resource requests |
-| Built into Kubernetes? | Yes |
-| Restarts Pods to scale? | No, it only adds or removes Pods |
+| `Off` | Only shows recommendations. Changes nothing. **Start here.** |
+| `Initial` | Applies values only when a Pod is newly created. Never restarts running Pods. |
+| `Recreate` | Restarts Pods to apply new values. |
+| `Auto` | Currently works like `Recreate`. |
 
----
+> Newer VPA versions can also resize Pods in place without a restart. Check the release notes for the version you install.
 
-## Part 2: VPA (Vertical Pod Autoscaler)
+### 3b. Install VPA
 
-> VPA watches real usage and adjusts the **size of each Pod**.
-
-### Why VPA Matters
-
-```
-Requests too low   ->  CPU throttling / OOMKilled
-Requests too high  ->  wasted node capacity, higher cost
-```
-
-- Good for apps that **cannot scale out** (single-instance apps, many databases)
-- Good for finding the right requests for any app
-
----
-
-### How It Works
-
-```
-Pod usage  ->  Recommender  ->  Updater  ->  Admission Controller
-(metrics)      (calculates)     (evicts Pod)  (sets new requests on the new Pod)
-```
-
-| Component | Role |
-|---|---|
-| **Recommender** | Watches usage history and calculates the recommended requests. |
-| **Updater** | Evicts Pods whose requests differ too much from the recommendation. |
-| **Admission Controller** | Rewrites the requests of Pods as they are created. |
-
-> VPA is **not built into Kubernetes**. You install it separately (CRDs + the three components above). It also needs metrics-server (see Install sections below).
-
----
-
-### Update Modes
-
-| `updateMode` | What VPA does | Use for |
-|---|---|---|
-| `Off` | Only calculates recommendations. Changes nothing. | **Start here.** Safe, read-only. |
-| `Initial` | Sets requests only when a Pod is created. Never restarts running Pods. | Apps that must not be disrupted |
-| `Recreate` | Evicts Pods to apply new requests. | Apps that tolerate restarts |
-| `Auto` | Currently behaves like `Recreate`. | Fully automatic tuning |
-
-> Newer VPA versions add an in-place resize option so Pods may not need a restart. Check the VPA release notes for your version.
-
-> **Every mode except `Off` and `Initial` restarts Pods** to change their resources. A single-replica app will see a brief outage.
-
----
-
-### Install VPA
-
-VPA is **not** metrics-server. It is a separate add-on made of three components, and it needs metrics-server to be running first.
-
-| | What it does | Installed by |
-|---|---|---|
-| **metrics-server** | Collects CPU and memory usage from the nodes | Its own manifest (see **Install metrics-server** above) |
-| **VPA** | Reads those metrics, then recommends or changes Pod requests | `./hack/vpa-up.sh` (below) |
+metrics-server must already be working (Step 1). VPA is a separate install:
 
 ```bash
 git clone https://github.com/kubernetes/autoscaler.git
 cd autoscaler/vertical-pod-autoscaler
 ./hack/vpa-up.sh
 
-# Verify
+# Verify: you should see 3 vpa Pods
 kubectl get pods -n kube-system | grep vpa
 kubectl get crd | grep verticalpodautoscaler
 ```
 
-You should see three Pods: `vpa-recommender`, `vpa-updater`, `vpa-admission-controller`.
+The three Pods are `vpa-recommender`, `vpa-updater` and `vpa-admission-controller`.
 
-**Order:** metrics-server first, then VPA, then your VPA YAML.
-
----
-
-### YAML Examples: Luminary Project
-
-#### 1. Deployment (target workload)
+### 3c. The VPA (recommendation only)
 
 ```yaml
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: web
-  namespace: luminary
-
-spec:
-  replicas: 2
-  selector:
-    matchLabels:
-      app: web
-
-  template:
-    metadata:
-      labels:
-        app: web
-    spec:
-      containers:
-        - name: web
-          image: nginx
-          resources:
-            requests:
-              cpu: 100m          # starting guess, VPA will refine it
-              memory: 128Mi
-```
-
----
-
-#### 2. VPA in Recommendation-Only Mode
-
-```yaml
+# vpa.yaml
 apiVersion: autoscaling.k8s.io/v1
 kind: VerticalPodAutoscaler
 metadata:
   name: web-vpa
   namespace: luminary
-
 spec:
   targetRef:
     apiVersion: apps/v1
     kind: Deployment
-    name: web                    # must match the Deployment name
-
+    name: web                      # must match the Deployment name
   updatePolicy:
-    updateMode: "Off"            # recommend only, no restarts
+    updateMode: "Off"              # recommend only, no restarts
 ```
 
----
-
-#### 3. VPA with Limits and Automatic Updates
+To let VPA apply changes automatically, switch to `"Auto"` and add safe limits:
 
 ```yaml
-apiVersion: autoscaling.k8s.io/v1
-kind: VerticalPodAutoscaler
-metadata:
-  name: web-vpa
-  namespace: luminary
-
-spec:
-  targetRef:
-    apiVersion: apps/v1
-    kind: Deployment
-    name: web
-
   updatePolicy:
     updateMode: "Auto"
-
   resourcePolicy:
     containerPolicies:
-      - containerName: "*"       # all containers, or use a specific name
+      - containerName: "*"
         minAllowed:
           cpu: 50m
           memory: 64Mi
         maxAllowed:
           cpu: "1"
           memory: 1Gi
-        controlledResources: ["cpu", "memory"]
 ```
 
-> **Checklist:**
-> - `targetRef.name` matches the workload
-> - Set `minAllowed` / `maxAllowed` so VPA can't pick extreme values
-> - Run with `Off` first and review before switching to `Auto`
-
----
-
-### Commands
+### 3d. Apply and read the result
 
 ```bash
-# Apply
 kubectl apply -f vpa.yaml
-
-# See recommendations
-kubectl get vpa -n luminary
 kubectl describe vpa web-vpa -n luminary
-
-# Compare with actual usage
-kubectl top pods -n luminary
 ```
 
-**Reading the recommendation** (bottom of `describe`):
+Wait a few minutes, then look at the bottom of the output:
 
 ```
 Recommendation:
@@ -489,47 +269,46 @@ Recommendation:
     Lower Bound:     Cpu: 25m,  Memory: 64Mi
     Target:          Cpu: 50m,  Memory: 100Mi
     Upper Bound:     Cpu: 200m, Memory: 300Mi
-    Uncapped Target: Cpu: 50m,  Memory: 100Mi
 ```
 
 | Field | Meaning |
 |---|---|
-| **Target** | The value VPA wants to set. Use this. |
-| **Lower Bound** | Minimum reasonable request. Below this the Pod likely struggles. |
-| **Upper Bound** | Above this the request is probably wasted. |
-| **Uncapped Target** | Target without your `minAllowed` / `maxAllowed` limits applied. |
+| **Target** | The value VPA recommends. Use this one. |
+| **Lower Bound** | Below this, the Pod will probably struggle |
+| **Upper Bound** | Above this, the resources are probably wasted |
 
-> Give VPA some time (minutes to hours) after install. Early recommendations are based on little data.
+### 3e. VPA problems
 
----
-
-### Common Mistakes
-
-| Mistake | Why It's Wrong |
+| Problem | Cause and fix |
 |---|---|
-| Using `Auto` with a single replica | The Pod is evicted and the app goes down briefly |
-| VPA and HPA both on CPU or memory | They fight: HPA adds Pods while VPA resizes them |
-| Starting in `Auto` mode | Unreviewed changes in production. Start with `Off`. |
-| No `minAllowed` / `maxAllowed` | VPA could pick a value too small to run or too large to schedule |
-| Trusting recommendations right after install | Not enough usage history yet |
-| Forgetting metrics-server | VPA has no data to work with |
-| Expecting VPA to add nodes | It only changes Pod requests. A bigger Pod may not fit and stays `Pending`. |
+| No recommendation yet | VPA needs time to collect usage. Wait a few minutes to hours. |
+| `Auto` mode causes a brief outage | The Pod is restarted. With only 1 replica the app goes down for a moment. |
+| Pod `Pending` after resize | VPA made it bigger than any node can fit. Set `maxAllowed`. |
 
 ---
 
-### VPA at a Glance
+## Cheat Sheet
 
-| Question | Answer |
-|---|---|
-| What does it change? | CPU and memory requests (and limits, proportionally) of each Pod |
-| Best for | Right-sizing, single-instance apps, databases |
-| Needs | VPA components installed, metrics-server |
-| Built into Kubernetes? | No, a separate add-on |
-| Restarts Pods to apply? | Yes, in `Recreate` / `Auto` modes |
+**Use them together safely:** do not let HPA and VPA both act on CPU or memory for the same app. HPA adds Pods while VPA resizes them, and they fight each other.
 
----
+**A good practical pattern:**
 
-## Using HPA and VPA Together
+1. Run VPA in `Off` mode to learn the right requests.
+2. Set those requests yourself in the Deployment.
+3. Let HPA handle traffic changes.
 
-- **Safe together** only if they use different metrics. Do not let both act on CPU or memory for the same workload, because HPA adds Pods while VPA resizes them and they fight.
-- **Practical pattern:** run VPA in `Off` mode to learn the right requests, set those requests by hand, then let HPA handle traffic changes.
+**All the commands in one place:**
+
+```bash
+# metrics-server
+kubectl top nodes
+kubectl top pods -A
+
+# HPA
+kubectl get hpa -n luminary -w
+kubectl describe hpa web-hpa -n luminary
+
+# VPA
+kubectl get vpa -n luminary
+kubectl describe vpa web-vpa -n luminary
+```
